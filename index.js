@@ -4,15 +4,16 @@ require('dotenv').config()
 const jwt = require('jsonwebtoken')
 const app = express()
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+
 const port = process.env.PORT || 5000;
 
 //midilware
 app.use(cors())
 app.use(express.json())
-
-
+app.use(express.urlencoded())
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const { default: axios } = require('axios')
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.0xslwlb.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -219,6 +220,7 @@ async function run() {
                 }
             }
             const deleteResult = await cartsCollection.deleteMany(query)
+
             res.send({ paymentResult, deleteResult })
         })
 
@@ -232,27 +234,115 @@ async function run() {
             res.send(result)
         })
 
+
+        //sslcommerz payment
+        app.post('/crect-ssl-payment', async (req, res) => {
+            const data = req.body
+            console.log(data)
+            //manual genarate trxId
+            const trxId = new ObjectId().toString()
+            data.transationId = trxId
+            const initiate = {
+                store_id: 'bistr68b979343a402',
+                store_passwd: 'bistr68b979343a402@ssl',
+                total_amount: data?.price,
+                currency: 'BDT',
+                tran_id: trxId, // use unique tran_id for each api call
+                success_url: 'http://localhost:5000/success-payment',
+                fail_url: 'http://localhost:5173/fail',
+                cancel_url: 'http://localhost:5173/cancel',
+                ipn_url: 'http://localhost:5000/ipn-success-payment',
+                shipping_method: 'Courier',
+                product_name: 'Computer.',
+                product_category: 'Electronic',
+                product_profile: 'general',
+                cus_name: `${data?.name}`,
+                cus_email: `${data?.email}`,
+                cus_add1: 'Dhaka',
+                cus_add2: 'Dhaka',
+                cus_city: 'Dhaka',
+                cus_state: 'Dhaka',
+                cus_postcode: '1000',
+                cus_country: 'Bangladesh',
+                cus_phone: '01711111111',
+                cus_fax: '01711111111',
+                ship_name: 'Customer Name',
+                ship_add1: 'Dhaka',
+                ship_add2: 'Dhaka',
+                ship_city: 'Dhaka',
+                ship_state: 'Dhaka',
+                ship_postcode: 1000,
+                ship_country: 'Bangladesh',
+            };
+
+            const inResponse = await axios({
+                url: 'https://sandbox.sslcommerz.com/gwprocess/v4/api.php',
+                method: "POST",
+                data: initiate,
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+            })
+            const saveData = await paymentCollection.insertOne(data)
+
+            const GatewayPageURL = inResponse?.data?.GatewayPageURL
+            console.log(GatewayPageURL)
+            res.send({ GatewayPageURL }, { saveData })
+        })
+
+        //success-payment
+        app.post('/success-payment', async (req, res) => {
+            const paymentSuccess = req.body
+
+            const { data } = await axios.get(`https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php?val_id=${paymentSuccess?.val_id}&store_id=bistr68b979343a402&store_passwd=bistr68b979343a402@ssl&format=json`)
+            if (data.status !== 'VALID') {
+                res.send({ message: 'In Valid Payment' })
+            }
+            const query = { transationId: data.tran_id }
+
+            const updatePayment = await paymentCollection.updateOne(query, {
+                $set: {
+                    status: 'success'
+                }
+            })
+            const payment = await paymentCollection.findOne(query)
+            console.log(payment)
+            const deletQuery = {
+                _id: {
+                    $in: payment.cartId.map(id => new ObjectId(id))
+
+                }
+
+            }
+            const deletCart = await cartsCollection.deleteMany(deletQuery)
+            res.redirect('http://localhost:5173/success')
+            console.log(updatePayment, deletCart)
+            res.send(deletCart)
+        })
+
+
+
         //state or analytice
-        app.get('/admin-stats',veryfyToken,verifyAdmin, async (req, res) => {
+        app.get('/admin-stats', veryfyToken, verifyAdmin, async (req, res) => {
             const users = await userCollection.estimatedDocumentCount()
             const menuItems = await menuCollection.estimatedDocumentCount()
             const orders = await paymentCollection.estimatedDocumentCount()
             //  this is not best way
             // const payment = await paymentCollection.find().toArray()
             // const revenue = payment.reduce((total, payment) => total + payment.price, 0)
-             
+
             //best way
-            const result=await paymentCollection.aggregate([
+            const result = await paymentCollection.aggregate([
                 {
-                 $group:{
-                    _id:null,
-                    totalRevenue:{
-                        $sum:'$price'
+                    $group: {
+                        _id: null,
+                        totalRevenue: {
+                            $sum: '$price'
+                        }
                     }
-                 }
                 },
             ]).toArray()
-            const revenue=result.length>0?result[0].totalRevenue:0;
+            const revenue = result.length > 0 ? result[0].totalRevenue : 0;
             res.send({
                 users,
                 menuItems,
@@ -261,43 +351,43 @@ async function run() {
             })
         })
         //order status
-        app.get('/order-stats',veryfyToken,verifyAdmin, async(req,res)=>{
-          const result=await paymentCollection.aggregate([
-            {
-                $unwind:'$menuId'
-            },
-            {
-                $lookup:{
-                    from:'menu',
-                    localField:'menuId',
-                    foreignField:'_id',
-                    as:'menuItems'
+        app.get('/order-stats', veryfyToken, verifyAdmin, async (req, res) => {
+            const result = await paymentCollection.aggregate([
+                {
+                    $unwind: '$menuId'
+                },
+                {
+                    $lookup: {
+                        from: 'menu',
+                        localField: 'menuId',
+                        foreignField: '_id',
+                        as: 'menuItems'
+                    }
+                },
+                {
+                    $unwind: '$menuItems'
+                },
+                {
+                    $group: {
+                        _id: '$menuItems.category',
+                        quantity: {
+                            $sum: 1
+                        },
+                        revenue: {
+                            $sum: '$menuItems.price'
+                        }
+                    }
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        category: '$_id',
+                        quantity: '$quantity',
+                        revenue: '$revenue'
+                    }
                 }
-            },
-            {
-                $unwind:'$menuItems'
-            },
-            {
-                $group:{
-                    _id:'$menuItems.category',
-                    quantity:{
-                        $sum:1
-                    },
-                   revenue:{
-                    $sum:'$menuItems.price'
-                   } 
-                }
-            },
-            {
-                $project:{
-                    _id:0,
-                    category:'$_id',
-                    quantity:'$quantity',
-                    revenue:'$revenue'
-                }
-            }
-          ]).toArray()
-          res.send(result)
+            ]).toArray()
+            res.send(result)
         })
 
 
