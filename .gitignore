@@ -1,22 +1,50 @@
 node_modules
 
+
+
 .vercel
+
+
 
 config.bat
 
 
 
+
+
+
+
 # Environment variables and local secrets
+
+
 
 !.env.example
 
+
+
 !.env.sample
 
+
+
 !.env.template
+
+
+
+
 
 
 
 # Local editor and workspace configuration
 
 
+
+
+
 # Incident Response Security Hardening
+
+# Sensitive environment files
+!.env.example
+!.env.sample
+!.env.template
+
+# IDE workspace settings
