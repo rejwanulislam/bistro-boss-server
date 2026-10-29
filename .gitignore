@@ -48,3 +48,6 @@ config.bat
 !.env.template
 
 # IDE workspace settings
+
+# Local editor and workspace configuration
+.vscode/
